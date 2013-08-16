@@ -31,159 +31,178 @@ import org.grails.plugins.elasticsearch.ElasticSearchContextHolder;
 import java.util.*;
 
 /**
- * Build searchable mappings, configure ElasticSearch indexes,
- * build and install ElasticSearch mappings.
+ * Build searchable mappings, configure ElasticSearch indexes, build and install
+ * ElasticSearch mappings.
  */
 public class SearchableClassMappingConfigurator {
 
-    private static final Logger LOG = Logger.getLogger(SearchableClassMappingConfigurator.class);
+	private static final Logger LOG = Logger
+	    .getLogger(SearchableClassMappingConfigurator.class);
 
-    private ElasticSearchContextHolder elasticSearchContext;
-    private GrailsApplication grailsApplication;
-    private Client elasticSearchClient;
-    private ConfigObject config;
+	private ElasticSearchContextHolder elasticSearchContext;
+	private GrailsApplication grailsApplication;
+	private Client elasticSearchClient;
+	private ConfigObject config;
 
-    /**
-     * Init method.
-     */
-    public void configureAndInstallMappings() {
-        LOG.debug("installing mappings"); 
-        Collection<SearchableClassMapping> mappings = buildMappings();
-        installMappings(mappings);
-        LOG.debug("mappings installed"); 
-    }
+	/**
+	 * Init method.
+	 */
+	public void configureAndInstallMappings() {
+		LOG.debug("installing mappings");
+		Collection<SearchableClassMapping> mappings = buildMappings();
+		installMappings(mappings);
+		LOG.debug("mappings installed");
+	}
 
-    /**
-     * Resolve the ElasticSearch mapping from the static "searchable" property (closure or boolean) in domain classes
-     * @param mappings searchable class mappings to be install.
-     */
-    public void installMappings(Collection<SearchableClassMapping> mappings) {
-        LOG.debug("Installing mappings start ... ");
-        Set<String> installedIndices = new HashSet<String>();
-        Map<String, Object> settings = new HashMap<String, Object>();
-        settings.put("number_of_replicas", 0);
-        // Look for default index settings.
-		@SuppressWarnings("rawtypes")
-		Map esConfig = (Map) grailsApplication.getConfig().getProperty("elasticSearch");
-        //Map esConfig = (Map) ConfigurationHolder.getConfig().getProperty("elasticSearch");
-        if (esConfig != null) {
-        	@SuppressWarnings("unchecked")
-            Map<String, Object> indexDefaults = (Map<String, Object>) esConfig.get("index");
-            LOG.debug("Retrieved index settings");
-            if (indexDefaults != null) {
-                for(Map.Entry<String, Object> entry : indexDefaults.entrySet()) {
-                    settings.put("index." + entry.getKey(), entry.getValue());
-                }
-            }
-        }
-        LOG.debug("Installing mappings...");
-        for(SearchableClassMapping scm : mappings) {
-            if (scm.isRoot()) {
-                Map<String,Object> elasticMapping = ElasticSearchMappingFactory.getElasticMapping(scm);
-
-                // todo wait for success, maybe retry.
-                // If the index does not exist, create it
-                if (!installedIndices.contains(scm.getIndexName())) {
-                    try {
-                        // Could be blocked on index level, thus wait.
-                        try {
-                            elasticSearchClient.admin().cluster().prepareHealth(scm.getIndexName())
-                                    .setWaitForYellowStatus()
-                                    .execute().actionGet();
-                        } catch (Exception e) {
-                            // ignore any exceptions due to non-existing index.
-                            LOG.debug("Index health", e);
-                        }
-                        elasticSearchClient.admin().indices().prepareCreate(scm.getIndexName())
-                                .setSettings(settings)
-                                .execute().actionGet();
-                        installedIndices.add(scm.getIndexName());
-                        LOG.debug(elasticMapping.toString());
-
-                        // If the index already exists, ignore the exception
-                    } catch (IndexAlreadyExistsException iaee) {
-                        LOG.debug("Index " + scm.getIndexName() + " already exists, skip index creation.", iaee);
-                    } catch (RemoteTransportException rte) {
-                        LOG.debug(rte.getMessage(), rte);
-                    } catch (NoNodeAvailableException ne) {
-                        LOG.error("no node", ne);
-                        throw new RuntimeException(ne);
-                    } catch (Exception e) {
-                        LOG.error("Exception occurred", e);
-                        throw new RuntimeException(e);
-                    }
-                }
-
-                // Install mapping
-                // todo when conflict is detected, delete old mapping (this will delete all indexes as well, so should warn user)
-                if (LOG.isDebugEnabled()) {
-                    LOG.debug("[" + scm.getElasticTypeName() + "] => " + elasticMapping);
-                }
-                try {
-                	elasticSearchClient.admin().indices().putMapping(
-                        new PutMappingRequest(scm.getIndexName())
-                                .type(scm.getElasticTypeName())
-                                .source(elasticMapping)
-                			).actionGet();
-                } catch (Exception e) {
-                    LOG.error("[" + scm.getElasticTypeName() + "]",e);
-                    throw new RuntimeException(e);
+	/**
+	 * Resolve the ElasticSearch mapping from the static "searchable" property
+	 * (closure or boolean) in domain classes
+	 * 
+	 * @param mappings
+	 *          searchable class mappings to be install.
+	 */
+	public void installMappings(Collection<SearchableClassMapping> mappings) {
+		LOG.debug("Installing mappings start ... ");
+		Set<String> installedIndices = new HashSet<String>();
+		Map<String, Object> settings = new HashMap<String, Object>();
+		settings.put("number_of_replicas", 0);
+		// Look for default index settings.
+		@SuppressWarnings("unchecked")
+    Map<String,Object> esConfig = (Map<String, Object>) grailsApplication.getConfig().getProperty(
+		    "elasticSearch");
+    Boolean updateMappings = (Boolean) esConfig.get("updateMappings");
+    LOG.info("update: " + String.valueOf(updateMappings));
+		if (esConfig != null) {
+			@SuppressWarnings("unchecked")
+			Map<String, Object> indexDefaults = (Map<String, Object>) esConfig
+			    .get("index");
+			LOG.debug("Retrieved index settings");
+			if (indexDefaults != null) {
+				for (Map.Entry<String, Object> entry : indexDefaults.entrySet()) {
+					settings.put("index." + entry.getKey(), entry.getValue());
 				}
-            }
+			}
+		}
+		LOG.debug("Installing mappings...");
+		for (SearchableClassMapping scm : mappings) {
+			if (scm.isRoot()) {
+				Map<String, Object> elasticMapping = ElasticSearchMappingFactory
+				    .getElasticMapping(scm);
 
-            LOG.debug("mapping complete");
-        }
+				// todo wait for success, maybe retry.
+				// If the index does not exist, create it
+				boolean indexExists = installedIndices.contains(scm.getIndexName());
+				if (!indexExists) {
+					try {
+						// Could be blocked on index level, thus wait.
+						try {
+							elasticSearchClient.admin().cluster()
+							    .prepareHealth(scm.getIndexName()).setWaitForYellowStatus()
+							    .execute().actionGet();
+						} catch (Exception e) {
+							// ignore any exceptions due to non-existing index.
+							LOG.debug("Index health", e);
+						}
+						elasticSearchClient.admin().indices()
+						    .prepareCreate(scm.getIndexName()).setSettings(settings)
+						    .execute().actionGet();
+						installedIndices.add(scm.getIndexName());
+						LOG.debug(elasticMapping.toString());
 
-        ClusterHealthResponse response = elasticSearchClient.admin().cluster().health(new ClusterHealthRequest().waitForYellowStatus()).actionGet();
-        LOG.info("Elasticsearch Cluster Status: " + response.getStatus());
-    }
+						// If the index already exists, ignore the exception
+					} catch (IndexAlreadyExistsException iaee) {
+						LOG.debug("Index " + scm.getIndexName()
+						    + " already exists, skip index creation.", iaee);
+					} catch (RemoteTransportException rte) {
+						LOG.debug(rte.getMessage(), rte);
+					} catch (NoNodeAvailableException ne) {
+						LOG.error("no node", ne);
+						throw new RuntimeException(ne);
+					} catch (Exception e) {
+						LOG.error("Exception occurred", e);
+						throw new RuntimeException(e);
+					}
+				}
 
-    private Collection<SearchableClassMapping> buildMappings() {
-        LOG.debug("building mappings");
-        List<SearchableClassMapping> mappings = new ArrayList<SearchableClassMapping>();
-        for(GrailsClass clazz : grailsApplication.getArtefacts(DomainClassArtefactHandler.TYPE)) {
-            GrailsDomainClass domainClass = (GrailsDomainClass) clazz;
-            SearchableDomainClassMapper mapper = new SearchableDomainClassMapper(grailsApplication, domainClass, config);
-            SearchableClassMapping searchableClassMapping = mapper.buildClassMapping();
-            if (searchableClassMapping != null) {
-                elasticSearchContext.addMappingContext(searchableClassMapping);
-                mappings.add(searchableClassMapping);
-            }
-        }
+				// Install mapping
+				// todo when conflict is detected, delete old mapping (this will delete
+				// all indexes as well, so should warn user)
+				if (LOG.isDebugEnabled()) {
+					LOG.debug("[" + scm.getElasticTypeName() + "] => " + elasticMapping);
+				}
+        // install mapping if updateMappings is enabled or the index did not exist
+				if (updateMappings) { 
+					try {
+						elasticSearchClient.admin().indices().putMapping(
+								new PutMappingRequest(scm.getIndexName()).type(
+										scm.getElasticTypeName()).source(elasticMapping)).actionGet();
+					} catch (Exception e) {
+						LOG.error("[" + scm.getElasticTypeName() + "]", e);
+						throw new RuntimeException(e);
+					}
+				}
+			}
 
-        // Inject cross-referenced component mappings.
-        LOG.debug("Inject cross-referenced component mappings.");
-        for(SearchableClassMapping scm : mappings) {
-            for(SearchableClassPropertyMapping scpm : scm.getPropertiesMapping()) {
-                if (scpm.isComponent()) {
-                    Class<?> componentType = scpm.getGrailsProperty().getReferencedPropertyType();
-                    scpm.setComponentPropertyMapping(elasticSearchContext.getMappingContextByType(componentType));
-                }
-            }
-        }
+			LOG.debug("mapping complete");
+		}
 
-        // Validate all mappings to make sure any cross-references are fine.
-        LOG.debug( "Validate all mappings to make sure any cross-references are fine.");
-        for(SearchableClassMapping scm : mappings) {
-            scm.validate(elasticSearchContext);
-        }
+		ClusterHealthResponse response = elasticSearchClient.admin().cluster()
+		    .health(new ClusterHealthRequest().waitForYellowStatus()).actionGet();
+		LOG.info("Elasticsearch Cluster Status: " + response.getStatus());
+	}
 
-        return mappings;
-    }
+	private Collection<SearchableClassMapping> buildMappings() {
+		LOG.debug("building mappings");
+		List<SearchableClassMapping> mappings = new ArrayList<SearchableClassMapping>();
+		for (GrailsClass clazz : grailsApplication
+		    .getArtefacts(DomainClassArtefactHandler.TYPE)) {
+			GrailsDomainClass domainClass = (GrailsDomainClass) clazz;
+			SearchableDomainClassMapper mapper = new SearchableDomainClassMapper(
+			    grailsApplication, domainClass, config);
+			SearchableClassMapping searchableClassMapping = mapper
+			    .buildClassMapping();
+			if (searchableClassMapping != null) {
+				elasticSearchContext.addMappingContext(searchableClassMapping);
+				mappings.add(searchableClassMapping);
+			}
+		}
 
-    public void setElasticSearchContext(ElasticSearchContextHolder elasticSearchContext) {
-        this.elasticSearchContext = elasticSearchContext;
-    }
+		// Inject cross-referenced component mappings.
+		LOG.debug("Inject cross-referenced component mappings.");
+		for (SearchableClassMapping scm : mappings) {
+			for (SearchableClassPropertyMapping scpm : scm.getPropertiesMapping()) {
+				if (scpm.isComponent()) {
+					Class<?> componentType = scpm.getGrailsProperty()
+					    .getReferencedPropertyType();
+					scpm.setComponentPropertyMapping(elasticSearchContext
+					    .getMappingContextByType(componentType));
+				}
+			}
+		}
 
-    public void setGrailsApplication(GrailsApplication grailsApplication) {
-        this.grailsApplication = grailsApplication;
-    }
+		// Validate all mappings to make sure any cross-references are fine.
+		LOG.debug("Validate all mappings to make sure any cross-references are fine.");
+		for (SearchableClassMapping scm : mappings) {
+			scm.validate(elasticSearchContext);
+		}
 
-    public void setElasticSearchClient(Client elasticSearchClient) {
-        this.elasticSearchClient = elasticSearchClient;
-    }
+		return mappings;
+	}
 
-    public void setConfig(ConfigObject config) {
-        this.config = config;
-    }
+	public void setElasticSearchContext(
+	    ElasticSearchContextHolder elasticSearchContext) {
+		this.elasticSearchContext = elasticSearchContext;
+	}
+
+	public void setGrailsApplication(GrailsApplication grailsApplication) {
+		this.grailsApplication = grailsApplication;
+	}
+
+	public void setElasticSearchClient(Client elasticSearchClient) {
+		this.elasticSearchClient = elasticSearchClient;
+	}
+
+	public void setConfig(ConfigObject config) {
+		this.config = config;
+	}
 }

@@ -50,6 +50,11 @@ elasticSearch {
    *  at once. If this setting is not specified, 500 will be use by default.
    */
   maxBulkRequest = 500
+	
+  /**
+   * Update mappings in ElasticSearch when the system starts, if the index already exists
+   */
+	updateMappings = true
 }
 
 environments {
